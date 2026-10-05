@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<h3>Удалённые IM-webhook уведомления о завершении хода, ошибке и ожидании approval</h3>
+<h3>Web Push, IM-вебхуки, звуковые сигналы, тосты и системные уведомления о завершении хода, ошибке и ожидании approval</h3>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@goodandready/dsh-plugin-notify"><img src="https://img.shields.io/npm/v/@goodandready/dsh-plugin-notify.svg?style=for-the-badge&color=6366f1&labelColor=1e1b4b" alt="npm version"></a>
@@ -39,11 +39,12 @@
 
 DeepSeek Harness уже знает, когда ход завершился, упал или ждёт approval. Без этого плагина события остаются внутри сессии. Если вы ведёте несколько параллельных сессий или переключились в другое приложение, приходится постоянно заглядывать и проверять статус вручную.
 
-Плагин закрывает этот разрыв четырьмя уровнями уведомлений:
+Плагин закрывает этот разрыв пятью уровнями уведомлений:
 1. **Звуковые сигналы (Web Audio)**: Приятные пентатонические переливы колокольчиков прямо в браузере или приложении DSH без внешних аудиофайлов.
 2. **Экранные тосты (In-App Toasts)**: Всплывающие карточки поверх сессий с интерактивной кнопкой **«Перейти в сессию»** для мгновенного перехода к нужной задаче.
 3. **Системные уведомления (OS / Desktop Push)**: Нативные уведомления Windows, macOS, Linux и DSH Desktop через HTML5 `Notification API` с фокусировкой окна и переходом в сессию.
 4. **Удалённые вебхуки (Remote IM)**: Отправка JSON-событий в Feishu, WeCom, DingTalk, Slack, Discord или custom HTTP-эндпоинт. Секретные URL вебхуков надёжно хранятся в DSH Credentials.
+5. **Web Push (PWA)**: Настоящий фоновый push через W3C Push API и service worker — телефон или десктоп получает уведомление, **даже если все вкладки dsh закрыты** (остальные браузерные каналы требуют открытой вкладки). Тап по уведомлению открывает dsh прямо на нужной сессии. Требуется HTTPS (или localhost); на iOS сначала добавьте dsh на главный экран (iOS 16.4+).
 
 Русский интерфейс карточки настроек даёт отдельный языковой пакет `dsh-russian-lang`. Этот плагин регистрирует словари `en` и `zh`.
 
@@ -60,6 +61,9 @@ graph TD
   F -->|Web Audio API| G[Звуковые сигналы]
   F -->|DOM overlay| H[Экранные тосты]
   F -->|Notification API| I[Десктопные уведомления OS]
+  B -->|web-push + VAPID| K[Push-сервис]
+  K -->|фоновый push| L[Service Worker /dsh-plugin-notify/sw.js]
+  L -->|тап: переход в сессию| F
   J[Карточка настроек] -->|параметры| B
 ```
 
@@ -76,6 +80,10 @@ graph TD
 - POST с `AbortSignal.timeout(timeoutMs)` (по умолчанию 5000 мс). Ошибка POST только логируется, без ретрая и без блокировки цикла агента.
 - Опциональное окно DND (`HH:MM`, в том числе через полночь). События наблюдаются; вебхуки, звуки и локальные попапы пропускаются.
 - `excludeSessionPrefixes` пропускает сессии, чей id начинается с заданного префикса.
+- **Web Push на хосте**: `webPush.enabled` включает канал Push API. При включённом `webPush.onlyWhenAway` (по умолчанию) доставка пропускается, пока подключён браузерный клиент по SSE.
+  - Маршруты: `GET /dsh-plugin-notify/push/key` (публичный VAPID-ключ), `POST /dsh-plugin-notify/push/subscribe`, `POST /dsh-plugin-notify/push/unsubscribe`, `POST /dsh-plugin-notify/push/test`, `GET /dsh-plugin-notify/sw.js` (service worker с заголовком `Service-Worker-Allowed: /`). Четыре push-маршрута используют тот же контур доверия, что и SSE-поток.
+  - VAPID-ключи генерируются при первом включении и сохраняются в файл состояния; переменные `DSH_NOTIFY_VAPID_PUBLIC_KEY` + `DSH_NOTIFY_VAPID_PRIVATE_KEY` позволяют управлять ими вручную. Подписки хранятся в том же файле (по умолчанию `$DSH_HOME/plugin-notify-state.json`, переопределяется `webPush.stateFile`).
+  - Мёртвые подписки (push-сервис отвечает 404/410) удаляются автоматически. Медленный или сломанный push-сервис никогда не блокирует цикл агента.
 
 ### Клиент (`lib/client.js`)
 
@@ -126,6 +134,11 @@ dsh plugin --profile web add @goodandready/dsh-plugin-notify
     includeSession: true
     includeDuration: true
     excludeSessionPrefixes: []
+    webPush:
+      enabled: false
+      onlyWhenAway: true
+      subject: 'mailto:notify@localhost'
+      stateFile: ''
 ```
 
 | Параметр | Тип | По умолчанию | Описание |
@@ -142,6 +155,10 @@ dsh plugin --profile web add @goodandready/dsh-plugin-notify
 | `includeSession` | boolean | `true` | Добавить строку `Session: …`. |
 | `includeDuration` | boolean | `true` | Добавить `Duration: …`, если известно время старта хода. |
 | `excludeSessionPrefixes` | string[] | `[]` | Не слать уведомления, если `session.id` начинается с префикса. |
+| `webPush.enabled` | boolean | `false` | Канал Web Push (PWA): фоновая доставка при закрытых вкладках dsh (opt-in). |
+| `webPush.onlyWhenAway` | boolean | `true` | Пропускать web push, пока подключён браузерный клиент. |
+| `webPush.subject` | string | `mailto:notify@localhost` | VAPID-контакт (mailto:/https:), передаваемый push-сервисам. |
+| `webPush.stateFile` | string | пусто | Файл состояния для VAPID-ключей и подписок (по умолчанию `$DSH_HOME/plugin-notify-state.json`). |
 
 Сырой `http(s)://` в `webhooks.*` всё ещё отправляется с предупреждением. Перенесите URL в Credentials.
 
@@ -191,8 +208,35 @@ npm test
 ✔ summarizeTurn safely reverse iterates events and handles missing session.events (issue #34 fix)
 ✔ textOf handles plain strings, arrays of blocks, and strings in arrays (issue #35 fix)
 ✔ lifecycle: apply -> dispose closes SSE clients, resets turnStarts, and isolates re-apply (issue #40 fix)
-ℹ tests 21
-ℹ pass 21
+✔ web push delivers approval requests to stored subscriptions
+✔ turn completion produces a task_done push honoring text options
+✔ onlyWhenAway skips push while a browser client is connected
+✔ onlyWhenAway=false pushes even with clients connected
+✔ disabled web push never sends
+✔ DND window suppresses push like every other channel
+✔ event filter and session-prefix exclusions apply to push
+✔ dead subscriptions (404/410) are pruned, live failures are not
+✔ no subscriptions means no sends and no errors
+✔ sw.js is served unauthenticated with scope and cache headers
+✔ sw.js rejects non-GET with 405
+✔ push routes refuse non-loopback peers when no connection service exists
+✔ push routes honor connection.requestRejection like the SSE stream
+✔ push/key: 404 while disabled, key material while enabled
+✔ push/subscribe: persists valid subscriptions, rejects invalid bodies
+✔ push/unsubscribe: removes by endpoint
+✔ push/test: sends to stored subscriptions via the injected library
+✔ push routes answer 405 on wrong methods
+✔ generateVapidKeys returns base64url P-256 keys
+✔ resolveStatePath: explicit stateFile wins, then DSH_HOME, then ~/.dsh
+✔ loadState tolerates missing and corrupted files
+✔ saveState round-trips and leaves no temp files behind
+✔ getVapidKeys generates once, persists, then reuses
+✔ getVapidKeys env override wins over the state file
+✔ addSubscription validates and dedupes by endpoint
+✔ removeSubscription removes and reports
+✔ concurrent saveState calls serialize into a valid file
+ℹ tests 48
+ℹ pass 48
 ℹ fail 0
 ```
 

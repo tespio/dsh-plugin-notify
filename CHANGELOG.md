@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-05
+
+### Added
+- **Web Push (PWA) notification channel (#52, GitHub PR #2)**: Background push notifications via W3C Push API and Service Worker (`/dsh-plugin-notify/sw.js`), delivering alerts even when all DSH tabs are closed.
+  - VAPID key generation and persistent storage (`$DSH_HOME/plugin-notify-state.json`) with env overrides (`DSH_NOTIFY_VAPID_PUBLIC_KEY`, `DSH_NOTIFY_VAPID_PRIVATE_KEY`).
+  - Secure push routes: `/dsh-plugin-notify/push/key`, `/subscribe`, `/unsubscribe`, `/test` protected by DSH connection auth.
+  - Smart away filtering: `webPush.onlyWhenAway` skips push while an active browser SSE client is connected.
+  - Service worker notification click deep linking: navigates to or opens triggering session (`?dshNotifySession=<id>`).
+  - Interactive Web UI card controls: subscription status, "Enable push on this device", "Disable push on this device", and "Test push".
+  - Comprehensive 27-test suite for web-push dispatch, routes, and state persistence (total 48 tests).
+
+## [0.3.8] - 2026-09-29
+
+### Fixed
+- **Settings schema unwrapping**: safely unwrap volatile schema fields across DSH 0.1.7-rc.2 and 0.2.0.
+
+## [0.3.7] - 2026-09-29
+
+### Fixed
+- **Peer gate on DSH 0.2.0-rc.1** (#58): DSH skips a profile bundle whose `peerDependencies` exclude the running version, so this plugin was absent from the profile with no error in the UI. Every `@deepseek-ai/dsh-*` peer now names both the 0.1.7-rc.2 and 0.2.0-rc.1 lines, because semver does not admit a prerelease of the next minor into a range that does not name it.
+
 ## [0.3.6] - 2026-09-25
 
 ### Fixed

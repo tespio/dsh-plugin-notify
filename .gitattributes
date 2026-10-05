@@ -1,0 +1,8 @@
+AGENTS.md export-ignore
+index.md export-ignore
+deploy.sh export-ignore
+publish.sh export-ignore
+.gitea export-ignore
+.planning export-ignore
+docs export-ignore
+

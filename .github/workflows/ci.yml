@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --no-package-lock
+
+      - name: Syntax check
+        run: |
+          node --check lib/index.js
+          node --check lib/client.js
+
+      - name: Run tests
+        run: npm test
+
+      - name: Package contents
+        run: |
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const fs = require("fs");
+            const p = JSON.parse(fs.readFileSync("/tmp/pack.json", "utf8"));
+            const entry = Array.isArray(p) ? p[0] : p[Object.keys(p)[0]];
+            const allowed = /^(lib\/|package\.json$|cordis\.patch\.yml$|README(\.[a-z]+)?\.md$|CHANGELOG\.md$|LICENSE$)/;
+            const forbidden = /^(AGENTS\.md|index\.md|deploy\.sh|publish\.sh|docs\/|\.gitea\/|\.github\/|\.planning\/)/;
+            const bad = (entry.files || []).filter((f) => !allowed.test(f.path) || forbidden.test(f.path));
+            const oversize = (entry.files || []).filter((f) => f.size > 262144);
+            if (bad.length) {
+              console.error("unexpected files in package:", bad.map((f) => f.path).join(", "));
+              process.exit(1);
+            }
+            if (oversize.length) {
+              console.error("files over 256 KiB:", oversize.map((f) => f.path + " " + f.size).join(", "));
+              process.exit(1);
+            }
+            console.log(`${entry.files.length} files, ${entry.size} bytes packed`);
+          '
+
+      - name: Leak scan
+        run: |
+          if grep -rn -iE '192\.168\.|10\.[0-9]+\.[0-9]+\.[0-9]+|/mnt/|/opt/|npm_[A-Za-z0-9]{36}|ghp_[A-Za-z0-9]{20,}' \
+               lib test README.md README.zh.md README.ru.md CHANGELOG.md --exclude-dir=node_modules; then
+            echo "Leak found in published files" >&2
+            exit 1
+          fi
+          echo "No leaks"
