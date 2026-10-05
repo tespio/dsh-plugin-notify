@@ -207,7 +207,7 @@ test('push/test: sends to stored subscriptions via the injected library', async 
   assert.equal(sends.length, 1)
   const payload = JSON.parse(sends[0].payload)
   assert.equal(payload.kind, 'task_done')
-  assert.ok(sends[0].opts.vapid.publicKey)
+  assert.ok(sends[0].opts.vapidDetails.publicKey)
 })
 
 test('push routes answer 405 on wrong methods', async (t) => {

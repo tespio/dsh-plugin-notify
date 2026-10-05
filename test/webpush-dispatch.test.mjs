@@ -94,7 +94,7 @@ test('web push delivers approval requests to stored subscriptions', async (t) =>
   assert.equal(payload.sessionId, 'sess-1')
   assert.ok(payload.title.includes('Approval'))
   assert.ok(payload.body.includes('bash'))
-  assert.ok(sends[0].opts.vapid.publicKey)
+  assert.ok(sends[0].opts.vapidDetails.publicKey)
 })
 
 test('turn completion produces a task_done push honoring text options', async (t) => {
