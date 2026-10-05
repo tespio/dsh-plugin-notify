@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Web Push (PWA) channel**: true background notifications via the W3C Push API that reach phones and desktops **even when every dsh browser tab is closed** — the gap the SSE/local channels cannot close. Opt-in `webPush.enabled` (default off), with `webPush.onlyWhenAway` (default on) to stay quiet while a browser client is connected, and `webPush.subject` for the VAPID contact.
+  - Host: VAPID keypair auto-generated on first use and persisted (default `$DSH_HOME/plugin-notify-state.json`, `webPush.stateFile` or `DSH_NOTIFY_VAPID_PUBLIC_KEY`/`DSH_NOTIFY_VAPID_PRIVATE_KEY` env override); push subscriptions persisted and deduped in the same file; new routes `GET /dsh-plugin-notify/push/key`, `POST /dsh-plugin-notify/push/subscribe`, `POST /dsh-plugin-notify/push/unsubscribe`, `POST /dsh-plugin-notify/push/test` (same trust fence as the SSE stream) and `GET /dsh-plugin-notify/sw.js` (service worker, `Service-Worker-Allowed: /`, no secrets); deliveries honor the existing DND/event-filter/session-exclusion logic; dead subscriptions (404/410) are pruned; sends never block the agent loop. New runtime dependency: `web-push`.
+  - Client: service-worker registration (document-relative, survives `--public-url` proxy mounts), permission + subscribe flow with "Enable push on this device" / "Test push" buttons and live status, and notification tap → jump to the triggering session (service-worker `postMessage` for live windows, `?dshNotifySession=` deep link for cold starts). en/zh locale strings.
+- **Public test suite** (`test/webpush-*.test.mjs`, 27 tests): VAPID + subscription persistence, route auth/validation, delivery gating (onlyWhenAway / DND / event filters / exclusions), and dead-endpoint pruning. Run with `npm test`.
+
 ## [0.3.6] - 2026-09-25
 
 ### Fixed

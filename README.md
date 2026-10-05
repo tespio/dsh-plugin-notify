@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<h3>Remote IM webhooks for turn done, errors, and approval waits</h3>
+<h3>Web push, IM webhooks, chimes, toasts, and desktop alerts for turn done, errors, and approval waits</h3>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@goodandready/dsh-plugin-notify"><img src="https://img.shields.io/npm/v/@goodandready/dsh-plugin-notify.svg?style=for-the-badge&color=6366f1&labelColor=1e1b4b" alt="npm version"></a>
@@ -39,11 +39,12 @@
 
 DeepSeek Harness already knows when a turn finished, failed, or is waiting for approval. Without this plugin, those events remain confined inside the session. If you are working across multiple parallel sessions or minimized in another app, you have to keep manually checking back.
 
-This plugin bridges that gap across four flexible notification layers:
+This plugin bridges that gap across five flexible notification layers:
 1. **Audio Chimes**: Synthesized Web Audio pentatonic chimes that play immediately upon turn completion, failure, or approval requests without external audio files.
 2. **Cross-Session Toasts**: On-screen floating banners that alert you across sessions with an interactive **"Go to session"** button to jump directly to the session that fired the event.
 3. **Desktop / OS Push Notifications**: Native Windows, macOS, Linux, and DSH Desktop notifications via HTML5 `Notification API` with window focus and session switching on click.
 4. **Remote IM Webhooks**: Outbound JSON webhooks for Feishu, WeCom, DingTalk, Slack, Discord, or generic custom endpoints. Webhook URLs are kept secret in DSH Credentials.
+5. **Web Push (PWA)**: True background push via the W3C Push API and a service worker — your phone or desktop gets notified **even when every dsh browser tab is closed** (the other browser channels require an open tab). Tapping the notification opens dsh directly on the triggering session. HTTPS (or localhost) required; on iOS the PWA must be added to the Home Screen (iOS 16.4+).
 
 ## Architecture
 
@@ -58,6 +59,9 @@ graph TD
   F -->|Web Audio API| G[Audio Chimes]
   F -->|DOM overlay| H[Cross-Session Toasts]
   F -->|Notification API| I[Desktop / OS Push]
+  B -->|web-push + VAPID| K[Push service]
+  K -->|background push| L[Service worker /dsh-plugin-notify/sw.js]
+  L -->|tap: jump to session| F
   J[Settings Card] -->|configuration| B
 ```
 
@@ -74,6 +78,10 @@ graph TD
 - Posts with `AbortSignal.timeout(timeoutMs)` (default 5000 ms). Failed POSTs are logged and never retried, and they never block the agent loop.
 - Optional DND window (`HH:MM`, including overnight ranges). Events are still observed; webhooks, chimes, and local popups are skipped.
 - `excludeSessionPrefixes` skips sessions whose id starts with a configured prefix.
+- **Web Push host**: `webPush.enabled` turns on the Push API channel. Deliveries are skipped while an SSE client is connected when `webPush.onlyWhenAway` is on (default), so you are not buzzed while watching.
+  - Routes: `GET /dsh-plugin-notify/push/key` (VAPID public key), `POST /dsh-plugin-notify/push/subscribe`, `POST /dsh-plugin-notify/push/unsubscribe`, `POST /dsh-plugin-notify/push/test`, `GET /dsh-plugin-notify/sw.js` (service worker; served with `Service-Worker-Allowed: /`). The four push routes use the same trust fence as the SSE stream.
+  - VAPID keys are generated on first use and persisted to the state file; set `DSH_NOTIFY_VAPID_PUBLIC_KEY` + `DSH_NOTIFY_VAPID_PRIVATE_KEY` to manage them yourself. Subscriptions persist in the same file (default `$DSH_HOME/plugin-notify-state.json`, override with `webPush.stateFile`).
+  - Dead subscriptions (push service answers 404/410) are pruned automatically. A slow or failing push service never blocks the agent loop.
 
 ### Client (`lib/client.js`)
 
@@ -81,6 +89,7 @@ graph TD
 - Web Audio API dual-tone chime synthesizer for `task_done`, `error`, and `approval_requested` with interactive "Test sound" button.
 - Non-intrusive floating toast manager with session navigation button and interactive "Test toast" button.
 - Native HTML5 desktop push integration with permission request workflow.
+- Web push: service-worker registration (document-relative, survives `--public-url` proxy mounts), permission + subscription flow, "Enable push on this device" and "Test push" buttons with live status, and `?dshNotifySession=<id>` deep-link handling (plus service-worker `postMessage`) that lands on the triggering session.
 - Real-time SSE subscriber with exponential-backoff auto-reconnect and optional `notifyBackgroundOnly` filter.
 - Snapshot status `loading` / `unavailable` / `ready` before the form is writable.
 - Save writes every field and lists named failures.
@@ -125,6 +134,11 @@ Put each webhook URL into **Settings → Credentials**. In the plugin card, type
     includeSession: true
     includeDuration: true
     excludeSessionPrefixes: []
+    webPush:
+      enabled: false
+      onlyWhenAway: true
+      subject: 'mailto:notify@localhost'
+      stateFile: ''
 ```
 
 | Parameter | Type | Default | Description |
@@ -133,6 +147,10 @@ Put each webhook URL into **Settings → Credentials**. In the plugin card, type
 | `enableToasts` | boolean | `false` | Show cross-session on-screen banner toasts with interactive session switching (opt-in). |
 | `enableDesktopNotifications` | boolean | `false` | Show native OS push notifications via HTML5 Notification API (opt-in). |
 | `notifyBackgroundOnly` | boolean | `false` | Only trigger audio, toasts, and push when event is from an inactive/background session. |
+| `webPush.enabled` | boolean | `false` | Web Push (PWA) channel: background push that reaches devices with every dsh tab closed (opt-in). |
+| `webPush.onlyWhenAway` | boolean | `true` | Skip web push while a browser client is connected to the SSE stream. |
+| `webPush.subject` | string | `mailto:notify@localhost` | VAPID subject (mailto:/https: contact) advertised to push services. |
+| `webPush.stateFile` | string | empty | State file for VAPID keys and subscriptions (default `$DSH_HOME/plugin-notify-state.json`). |
 | `webhooks.*` | string | empty | Credential **name** whose value is the webhook URL. Empty disables the channel. |
 | `events` | string[] | `task_done`, `error`, `approval_requested` | Event whitelist. Empty restores the default three. |
 | `local` | boolean | `true` | macOS `osascript` popup; ignored on other platforms. |
@@ -144,6 +162,14 @@ Put each webhook URL into **Settings → Credentials**. In the plugin card, type
 
 A leftover raw `http(s)://` value in `webhooks.*` still posts, with a deprecation warning. Migrate it to Credentials.
 
+### Enabling web push
+
+1. In the plugin card, check **Enable web push channel** and save.
+2. Click **Enable push on this device** and accept the browser permission prompt — the device subscribes and uploads its push endpoint to the host.
+3. Click **Test push** to confirm delivery.
+
+Desktop Chrome, Edge, Firefox, and Android Chrome work out of the box. On iOS, add dsh to the Home Screen first (iOS 16.4+). A secure context (HTTPS or `localhost`) is required — real deployments already terminate TLS at their reverse proxy. Unlike the other browser channels, web push reaches the device even when no dsh tab is running; with `webPush.onlyWhenAway` (default) it also stays quiet while you are actively watching.
+
 ## Message shape
 
 | Channel | JSON body |
@@ -154,6 +180,7 @@ A leftover raw `http(s)://` value in `webhooks.*` still posts, with a deprecatio
 | Slack | `{ text }` |
 | Discord | `{ content: text }` |
 | custom | `{ text, kind, title, sessionId, durationMs, time }` |
+| Web Push | `{ kind, title, body, sessionId, tag, ts }` (encrypted by the push service; ≤4 KB pointer payload, no secrets) |
 
 Text body:
 
@@ -176,34 +203,40 @@ npm test
 
 `pretest` runs `node --check` on `lib/index.js` and `lib/client.js`. `npm test` then runs `node --test test/*.test.mjs`.
 
-The suite stubs `fetch` / a local HTTP listener. It does not call a real IM provider. Live delivery needs a webhook you own.
+The suite stubs `fetch` / the push sender. It does not call a real IM provider or push service. Live delivery needs a webhook you own (or a browser subscription, for web push).
 
-Expected output:
+This repository ships the web-push channel suite in three files — `test/webpush-state.test.mjs` (VAPID + subscription persistence), `test/webpush-routes.test.mjs` (route auth and validation), and `test/webpush-dispatch.test.mjs` (delivery gating, DND, filters, dead-endpoint pruning):
 
 ```text
-✔ public package identity matches host, client and patch sites
-✔ client locale registration coexists with Russian language pack
-✔ client apply does not register ru and can reload after effect dispose
-✔ legacy raw webhook URL still posts (compat)
-✔ credential ref resolves webhook URL via credentials service
-✔ resolveWebhookValue prefers credentials then env
-✔ missing credential name does not post
-✔ each IM channel posts the expected body shape
-✔ recipient HTTP failure does not throw out of the session loop
-✔ AbortSignal.timeout is attached to webhook POST
-✔ excluded session prefixes suppress notifications
-✔ Config schema validates sound, toast, and desktop notification fields with opt-in defaults
-✔ SSE route delegates authentication to DSH connection service with loopback fallback (issue #21 fix)
-✔ SSE route falls back to loopback-only check when connection service is absent (issue #21 fix)
-✔ client does not register settings.section slot (issue #16 fix)
-✔ deliveries and warnings are routed through ctx.logger without console calls (issue #22 fix)
-✔ cleanupTurnStarts purges stale turnStarts entries older than TTL (issue #32 fix)
-✔ sendSseHeartbeat writes ping comment to active clients and purges failed clients (issue #33 fix)
-✔ summarizeTurn safely reverse iterates events and handles missing session.events (issue #34 fix)
-✔ textOf handles plain strings, arrays of blocks, and strings in arrays (issue #35 fix)
-✔ lifecycle: apply -> dispose closes SSE clients, resets turnStarts, and isolates re-apply (issue #40 fix)
-ℹ tests 21
-ℹ pass 21
+✔ generateVapidKeys returns base64url P-256 keys
+✔ resolveStatePath: explicit stateFile wins, then DSH_HOME, then ~/.dsh
+✔ loadState tolerates missing and corrupted files
+✔ saveState round-trips and leaves no temp files behind
+✔ getVapidKeys generates once, persists, then reuses
+✔ getVapidKeys env override wins over the state file
+✔ addSubscription validates and dedupes by endpoint
+✔ removeSubscription removes and reports
+✔ concurrent saveState calls serialize into a valid file
+✔ sw.js is served unauthenticated with scope and cache headers
+✔ sw.js rejects non-GET with 405
+✔ push routes refuse non-loopback peers when no connection service exists
+✔ push routes honor connection.requestRejection like the SSE stream
+✔ push/key: 404 while disabled, key material while enabled
+✔ push/subscribe: persists valid subscriptions, rejects invalid bodies
+✔ push/unsubscribe: removes by endpoint
+✔ push/test: sends to stored subscriptions via the injected library
+✔ push routes answer 405 on wrong methods
+✔ web push delivers approval requests to stored subscriptions
+✔ turn completion produces a task_done push honoring text options
+✔ onlyWhenAway skips push while a browser client is connected
+✔ onlyWhenAway=false pushes even with clients connected
+✔ disabled web push never sends
+✔ DND window suppresses push like every other channel
+✔ event filter and session-prefix exclusions apply to push
+✔ dead subscriptions (404/410) are pruned, live failures are not
+✔ no subscriptions means no sends and no errors
+ℹ tests 27
+ℹ pass 27
 ℹ fail 0
 ```
 
